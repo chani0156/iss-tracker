@@ -15,22 +15,58 @@ app.get('/utm', getUTMCoordinatesHandler);
 
 const wss = new WebSocket.Server({ noServer: true });
 
-wss.on('connection', (ws) => {
-    const sendLocation = async () => {
-        try {
-            const coordinates = await getISSLocation();
-            const country = getCountryByCoordinates(coordinates);
-            ws.send(JSON.stringify({ coordinates, country }));
-        } catch (error) {
-            console.error('Error sending location:', error.message);
+let previousCountry = null;
+let lastSentTime = 0;
+
+// Function to send location to all connected clients
+const sendLocationToClients = (coordinates, country) => {
+    const message = JSON.stringify({ coordinates, country });
+
+    console.log('Sending message to clients:', message);
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
         }
-    };
+    });
 
-    sendLocation();
-    const interval = setInterval(sendLocation, 10000);
+    lastSentTime = Date.now();
+};
 
-    ws.on('close', () => clearInterval(interval));
+// Function to check ISS location every 2 seconds
+const pollISSLocation = async () => {
+    try {
+        const coordinates = await getISSLocation();
+        const country = getCountryByCoordinates(coordinates);
+        const currentTime = Date.now();
+
+        // Send update if country changes
+        if (country !== previousCountry&&country!="Ocean") {
+            previousCountry = country;
+            console.log("The ISS enters the territory of a new country.")
+            sendLocationToClients(coordinates, country);
+        }
+
+        // Send periodic update every 10 seconds
+        if (currentTime - lastSentTime >= 10000) {
+            sendLocationToClients(coordinates, country);
+        }
+    } catch (error) {
+        console.error('Error polling ISS location:', error.message);
+    }
+};
+
+// WebSocket connection setup
+wss.on('connection', (ws) => {
+    console.log('Client connected');
+    pollISSLocation();
+
+    ws.on('close', () => {
+        console.log('Client disconnected');
+    });
 });
+
+// Set up an interval to poll ISS location every 2 seconds
+setInterval(pollISSLocation, 2000);
 
 const server = app.listen(PORT, () => {
     console.log(`ISS Tracker API running at http://localhost:${PORT}`);
